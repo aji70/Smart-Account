@@ -1,66 +1,110 @@
 const hre = require("hardhat");
 
-const EP_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+const EP_ADDRESS = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 
-const FACTORY_NONCE = 1;
+const FACTORY_ADDRESS = "0xF859cDe014458dCeB45DF6A18b31a1dED5EA7Baa";
 
-const FACTORY_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
-
-const PM_ADDRESS = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0";
+const PM_ADDRESS = "0xeFd1f317B9227DaFfECCFBBFF9d2a240f23E236b";
 
 async function main() {
-  // Account #0: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 (10000 ETH)
-  // Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-  //Create: hash(deployer + nonce)
-
-  const sender = await hre.ethers.getCreateAddress({
-    from: FACTORY_ADDRESS,
-    nonce: FACTORY_NONCE,
-  });
   const entryPoint = await hre.ethers.getContractAt("EntryPoint", EP_ADDRESS);
   const AccountFactory = await hre.ethers.getContractFactory("AccountFactory");
 
-  const [signer0, signer1, signer2, signer3] = await hre.ethers.getSigners();
-
-  // const signature = signer0.signMessage(
-  //   hre.ethers.getBytes(hre.ethers.id("wee"))
-  // );
+  const [signer0] = await hre.ethers.getSigners();
 
   const address0 = await signer0.getAddress();
-  const initCode = "0x";
+
+  let initCode = "0x";
   // FACTORY_ADDRESS +
   // AccountFactory.interface
   //   .encodeFunctionData("createAccount", [address0])
   //   .slice(2);
-  console.log("sender", { sender }); //smart Account address 0xCafac3dD18aC6c6e92c921884f9E4176737C052c
+  let sender;
+  try {
+    await entryPoint.getSenderAddress(initCode);
+  } catch (ex) {
+    sender = "0x" + ex.data.slice(-40);
+  }
 
-  // await entryPoint.depositTo(PM_ADDRESS, {
-  //   value: hre.ethers.parseEther("100"),
-  // });
+  const code = await ethers.provider.getCode(sender);
+
+  if (code !== "0x") {
+    initCode = "0x";
+  }
+  console.log("sender", { sender }); //smart Account
 
   const Account = await hre.ethers.getContractFactory("Account");
 
   const userOp = {
     sender, //deployer address smart account address
-    nonce: await entryPoint.getNonce(sender, 0),
+    nonce: "0x" + (await entryPoint.getNonce(sender, 0)).toString(16),
     initCode,
     callData: Account.interface.encodeFunctionData("execute"),
-    callGasLimit: 400_000,
-    verificationGasLimit: 400_000,
-    preVerificationGas: 100_000,
-    maxFeePerGas: hre.ethers.parseUnits("10", "gwei"),
-    maxPriorityFeePerGas: hre.ethers.parseUnits("5", "gwei"),
     paymasterAndData: PM_ADDRESS,
-    signature: "0x",
+    signature:
+      "0xfffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c",
   };
 
+  const { preVerificationGas, callGasLimit, verificationGasLimit } =
+    await ethers.provider.send("eth_estimateUserOperationGas", [
+      userOp,
+      EP_ADDRESS,
+    ]);
+  userOp.preVerificationGas = preVerificationGas;
+  userOp.callGasLimit = callGasLimit;
+  userOp.verificationGasLimit = verificationGasLimit;
+
+  const { maxFeePerGas } = await ethers.provider.getFeeData();
+  userOp.maxFeePerGas = "0x" + maxFeePerGas.toString(16);
+
+  const maxPriorityFeePerGas = await ethers.provider.send(
+    "rundler_maxPriorityFeePerGas"
+  );
+
+  userOp.maxPriorityFeePerGas = maxPriorityFeePerGas;
+
   const userOpHash = await entryPoint.getUserOpHash(userOp);
-  userOp.signature = signer0.signMessage(hre.ethers.getBytes(userOpHash));
+  userOp.signature = await signer0.signMessage(hre.ethers.getBytes(userOpHash));
 
-  const tx = await entryPoint.handleOps([userOp], address0);
-  const receipt = await tx.wait();
+  const opHash = await ethers.provider.send("eth_sendUserOperation", [
+    userOp,
+    EP_ADDRESS,
+  ]);
 
-  console.log(receipt);
+  // setTimeout(async () => {
+  //   const { transcationHarsh } = await ethers.provider.send(
+  //     "eth_getUserOperationByHash",
+  //     [opHash]
+  //   );
+  //   console.log(transcationHarsh);
+  // }, 5000);
+  async function waitForTransaction(opHash) {
+    let tries = 0;
+    while (tries < 10) {
+      // Retry up to 10 times (adjust as needed)
+      const result = await ethers.provider.send("eth_getUserOperationByHash", [
+        opHash,
+      ]);
+
+      if (result && result.transactionHash) {
+        console.log("Transaction Hash:", result.transactionHash);
+        return;
+      }
+
+      console.log("Waiting for transaction...");
+      await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5s before retrying
+      tries++;
+    }
+    console.log("Transaction not found after multiple attempts.");
+  }
+
+  // Call the function after sending the UserOperation
+  waitForTransaction(opHash);
+
+  // const tx = await entryPoint.handleOps([userOp], address0);
+  // const receipt = await tx.wait();
+
+  // console.log(receipt);
 }
 
 main().catch((error) => {

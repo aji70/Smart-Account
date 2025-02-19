@@ -3,10 +3,12 @@
 
 const { buildModule } = require("@nomicfoundation/hardhat-ignition/modules");
 
-module.exports = buildModule("AAModule", (m) => {
-  const ep = m.contract("EntryPoint");
-  const af = m.contract("AccountFactory");
+module.exports = buildModule("UserProfileFactoryModule", (m) => {
+  const af = m.contract("UserProfileFactory");
   const pm = m.contract("Paymaster");
+  const ep = m.contract("EntryPoint");
+  const nft = m.contract("GeneralNFT", ["Ajidokwu"]);
+  const bank = m.contract("GameBank", [8, nft]);
 
-  return { ep, af, pm };
+  return { af, pm, ep, nft, bank };
 });
